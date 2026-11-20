@@ -9,6 +9,17 @@
 
     <include layout="@layout/app_toolbar" />
 
+    <TextView
+        android:id="@+id/lab_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#254F82"
+        android:gravity="center"
+        android:padding="8dp"
+        android:text="@string/lab_banner"
+        android:textColor="#FFFFFF"
+        android:textStyle="bold" />
+
     <RelativeLayout
     android:layout_width="match_parent"
     android:layout_height="0dp"

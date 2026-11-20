@@ -1,0 +1,32 @@
+name: Build diagnostic APK
+on:
+  push:
+    branches: [diagnostic-lab]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install build packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.0.12077973' 'cmake;3.22.1'
+      - name: Assemble
+        run: bash ./gradlew --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ByeByeDPI-Lab
+          path: app/build/outputs/apk/debug/*-universal-debug.apk
+          retention-days: 3
+          if-no-files-found: error

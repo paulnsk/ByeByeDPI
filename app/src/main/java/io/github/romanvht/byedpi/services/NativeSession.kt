@@ -224,6 +224,7 @@ internal class NativeSession(
                 if (state != EngineProtocol.STATE_STOPPING) {
                     state = EngineProtocol.STATE_RUNNING
                     reply(EngineProtocol.STARTED)
+                    if (createTunnel != null) Log.i("BbdLab", "vpn_ready")
                 }
             } catch (e: CancellationException) {
                 if (state != EngineProtocol.STATE_STOPPING) fail("Engine startup timed out")
