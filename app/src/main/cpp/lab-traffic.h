@@ -8,6 +8,7 @@ void lab_client_hello(int fd, const char *data, size_t len);
 
 int lab_set_hello_wait(const char *value);
 int lab_arm_hello_wait(int fd);
+int lab_has_hello_wait(int fd);
 int lab_finish_hello_wait(int fd, int timed_out);
 
 #endif

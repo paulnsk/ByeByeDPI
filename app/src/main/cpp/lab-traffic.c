@@ -155,6 +155,15 @@ int lab_arm_hello_wait(int fd) {
     return wait;
 }
 
+int lab_has_hello_wait(int fd) {
+    if (!hello_wait_ms || !valid_fd(fd)) return 0;
+    pthread_mutex_lock(&flows_lock);
+    const struct flow *f = &flows[fd];
+    int pending = f->id && f->hello_wait == 1;
+    pthread_mutex_unlock(&flows_lock);
+    return pending;
+}
+
 int lab_finish_hello_wait(int fd, int timed_out) {
     if (!hello_wait_ms || !valid_fd(fd)) return 0;
     pthread_mutex_lock(&flows_lock);

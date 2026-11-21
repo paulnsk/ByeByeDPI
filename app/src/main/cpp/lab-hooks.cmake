@@ -27,6 +27,9 @@ function(lab_hook unit)
     else()
         lab_replace(content "        if (!error) error = ECONNREFUSED;"
             "        if (!error) error = ECONNREFUSED;\n        lab_tcp_status(val->fd, error);")
+        set(marker "    if (etype == POLLTIMEOUT && !pair->buff && val->round_count) {")
+        lab_replace(content "${marker}"
+            "    if (etype == POLLTIMEOUT && lab_has_hello_wait(val->fd))\n        return on_timeout(pool, val);\n${marker}")
         set(marker "        val->cb = &on_tunnel;\n        val->pair->cb = &on_tunnel;")
         lab_replace(content "${marker}" "        lab_tcp_status(val->fd, 0);\n${marker}")
     endif()
