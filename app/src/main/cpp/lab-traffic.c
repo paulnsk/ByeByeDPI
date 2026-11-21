@@ -22,10 +22,12 @@ struct flow {
     unsigned char tls_start[6];
     unsigned tls_bytes;
     int tls_expected, tls_observed, read_ended;
+    int media, hello_wait;
 };
 
 static struct flow flows[MAX_FD];
 static unsigned next_id;
+static int hello_wait_ms;
 static pthread_mutex_t flows_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int __real_connect(int fd, const struct sockaddr *addr, socklen_t len);
@@ -123,10 +125,47 @@ void lab_client_hello(int fd, const char *data, size_t len) {
     struct flow *f = &flows[fd];
     if (f->id && f->type == SOCK_STREAM && !f->tls_expected) {
         f->tls_expected = 1;
+        f->media = n > 3 && host[0] == 'r' && host[1] == 'r'
+            && host[2] >= '0' && host[2] <= '9' && domain_suffix(host, n, "googlevideo.com");
         __android_log_print(ANDROID_LOG_INFO, "BbdLab",
             "hello id=%u sni=%.*s bytes=%zu", f->id, n, host, len);
     }
     pthread_mutex_unlock(&flows_lock);
+}
+
+int lab_set_hello_wait(const char *value) {
+    char *end;
+    long parsed = strtol(value, &end, 10);
+    if (!*value || *end || parsed < 250 || parsed > 10000) return -1;
+    hello_wait_ms = (int)parsed;
+    return 0;
+}
+
+int lab_arm_hello_wait(int fd) {
+    if (!hello_wait_ms || !valid_fd(fd)) return 0;
+    pthread_mutex_lock(&flows_lock);
+    struct flow *f = &flows[fd];
+    int wait = 0;
+    if (f->id && f->media && !f->hello_wait && !f->down && f->up) {
+        f->hello_wait = 1;
+        wait = hello_wait_ms;
+        stage(f, "hello_wait", 0);
+    }
+    pthread_mutex_unlock(&flows_lock);
+    return wait;
+}
+
+int lab_finish_hello_wait(int fd, int timed_out) {
+    if (!hello_wait_ms || !valid_fd(fd)) return 0;
+    pthread_mutex_lock(&flows_lock);
+    struct flow *f = &flows[fd];
+    int pending = f->id && f->hello_wait == 1;
+    if (pending) {
+        f->hello_wait = 2;
+        if (timed_out) stage(f, "hello_timeout", 0);
+    }
+    pthread_mutex_unlock(&flows_lock);
+    return pending;
 }
 
 static void account_receive(int fd, const void *data, ssize_t size, int error) {
@@ -164,11 +203,12 @@ static void account(int fd, ssize_t size, int incoming) {
     struct flow *f = &flows[fd];
     if (f->id) {
         int first_down = incoming && f->down == 0;
+        int first_up = !incoming && f->up == 0 && f->tls_expected;
         if (incoming) f->down += (uint64_t)size;
         else f->up += (uint64_t)size;
         uint64_t now = monotonic_ms();
-        if (first_down || now - f->last_log >= 1000) {
-            emit(f, first_down ? "first_down" : "bytes", 0);
+        if (first_up || first_down || now - f->last_log >= 1000) {
+            emit(f, first_up ? "first_up" : first_down ? "first_down" : "bytes", 0);
             f->last_log = now;
         }
     }

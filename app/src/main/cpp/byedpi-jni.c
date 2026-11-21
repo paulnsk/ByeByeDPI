@@ -7,6 +7,7 @@
 
 #include "byedpi/error.h"
 #include "main.h"
+#include "lab-traffic.h"
 
 extern int server_fd;
 static pthread_mutex_t proxy_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -54,13 +55,30 @@ Java_io_github_romanvht_byedpi_core_ByeDpiProxy_jniStartProxy(JNIEnv *env, __att
         }
     }
 
-    LOG(LOG_S, "starting proxy with %d args", argc);
+    const char option[] = "--lab-hello-wait=";
+    int native_argc = 0;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0 && strncmp(argv[i], option, sizeof(option) - 1) == 0) {
+            if (lab_set_hello_wait(argv[i] + sizeof(option) - 1) != 0) {
+                LOG(LOG_E, "invalid diagnostic hello wait");
+                goto cleanup;
+            }
+            free(argv[i]);
+            argv[i] = NULL;
+        } else if (i != native_argc) {
+            argv[native_argc++] = argv[i];
+            argv[i] = NULL;
+        } else {
+            native_argc++;
+        }
+    }
+    LOG(LOG_S, "starting proxy with %d args", native_argc);
     pthread_mutex_lock(&proxy_mutex);
     server_fd = -1;
     proxy_running = 1;
     pthread_mutex_unlock(&proxy_mutex);
 
-    result = main(argc, argv);
+    result = main(native_argc, argv);
 
     pthread_mutex_lock(&proxy_mutex);
     proxy_running = 0;

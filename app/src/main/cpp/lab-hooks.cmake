@@ -15,6 +15,15 @@ function(lab_hook unit)
     if(unit STREQUAL "extend")
         lab_replace(content "    save_hostname(client, buffer, n);"
             "    save_hostname(client, buffer, n);\n    lab_client_hello(client->pair->fd, buffer, n);")
+        set(marker "    remote->pair->round_sent += sn;")
+        lab_replace(content "${marker}"
+            "    if (remote->flag == FLAG_CONN && sn > 0 && *n >= (ssize_t)off\n        && sn >= *n - (ssize_t)off) {\n        int ms = lab_arm_hello_wait(remote->fd);\n        if (ms > 0) set_timer(pool, remote, ms);\n    }\n${marker}")
+        set(marker "    val->recv_count += n;")
+        lab_replace(content "${marker}"
+            "    if (val->flag == FLAG_CONN && lab_finish_hello_wait(val->fd, 0))\n        remove_timer(pool, val);\n${marker}")
+        set(marker "int on_timeout(struct poolhd *pool, struct eval *val) {")
+        lab_replace(content "${marker}"
+            "${marker}\n    if (lab_finish_hello_wait(val->fd, 1)) return on_torst(pool, val);")
     else()
         lab_replace(content "        if (!error) error = ECONNREFUSED;"
             "        if (!error) error = ECONNREFUSED;\n        lab_tcp_status(val->fd, error);")
