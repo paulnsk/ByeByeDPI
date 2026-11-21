@@ -8,6 +8,9 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
+#include "lab-traffic.h"
+#include "packets.h"
 
 enum { MAX_FD = 8192 };
 struct flow {
@@ -16,6 +19,9 @@ struct flow {
     unsigned port;
     char ip[INET6_ADDRSTRLEN];
     uint64_t up, down, last_log;
+    unsigned char tls_start[6];
+    unsigned tls_bytes;
+    int tls_expected, tls_observed, read_ended;
 };
 
 static struct flow flows[MAX_FD];
@@ -80,6 +86,78 @@ static void begin_flow(int fd, const struct sockaddr *addr, socklen_t len, int e
     pthread_mutex_unlock(&flows_lock);
 }
 
+static void stage(const struct flow *f, const char *event, int error) {
+    __android_log_print(ANDROID_LOG_INFO, "BbdLab",
+        "stage event=%s id=%u errno=%d", event, f->id, error);
+}
+
+void lab_tcp_status(int fd, int error) {
+    if (!valid_fd(fd)) return;
+    pthread_mutex_lock(&flows_lock);
+    const struct flow *f = &flows[fd];
+    if (f->id && f->type == SOCK_STREAM)
+        stage(f, error == 0 ? "tcp_ready" : "tcp_failed", error);
+    pthread_mutex_unlock(&flows_lock);
+}
+
+static int domain_suffix(const char *host, size_t len, const char *suffix) {
+    size_t n = strlen(suffix);
+    return len >= n && (len == n || host[len - n - 1] == '.')
+        && memcmp(host + len - n, suffix, n) == 0;
+}
+
+void lab_client_hello(int fd, const char *data, size_t len) {
+    if (!valid_fd(fd) || !is_tls_chello(data, len)) return;
+    char *host = NULL;
+    int n = parse_tls(data, len, &host);
+    if (n <= 0 || n > 253 || !host) return;
+    for (int i = 0; i < n; i++) {
+        char c = host[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.'))
+            return;
+    }
+    if (!domain_suffix(host, n, "googlevideo.com") &&
+        !domain_suffix(host, n, "youtube.com") &&
+        !domain_suffix(host, n, "youtubei.googleapis.com")) return;
+    pthread_mutex_lock(&flows_lock);
+    struct flow *f = &flows[fd];
+    if (f->id && f->type == SOCK_STREAM && !f->tls_expected) {
+        f->tls_expected = 1;
+        __android_log_print(ANDROID_LOG_INFO, "BbdLab",
+            "hello id=%u sni=%.*s bytes=%zu", f->id, n, host, len);
+    }
+    pthread_mutex_unlock(&flows_lock);
+}
+
+static void account_receive(int fd, const void *data, ssize_t size, int error) {
+    if (!valid_fd(fd)) return;
+    pthread_mutex_lock(&flows_lock);
+    struct flow *f = &flows[fd];
+    if (f->id && f->type == SOCK_STREAM) {
+        if (size > 0 && f->tls_expected && !f->tls_observed) {
+            size_t take = sizeof(f->tls_start) - f->tls_bytes;
+            if (take > (size_t)size) take = (size_t)size;
+            memcpy(f->tls_start + f->tls_bytes, data, take);
+            f->tls_bytes += take;
+            if (f->tls_bytes == sizeof(f->tls_start)) {
+                const unsigned char *h = f->tls_start;
+                const char *event = "first_tls_other";
+                if (h[1] == 3 && h[2] <= 4) {
+                    if (h[0] == 22 && h[5] == 2) event = "server_hello";
+                    else if (h[0] == 21) event = "tls_alert";
+                }
+                stage(f, event, 0);
+                f->tls_observed = 1;
+            }
+        } else if (size <= 0 && !f->read_ended &&
+                   (size == 0 || (error != EAGAIN && error != EWOULDBLOCK && error != EINTR))) {
+            stage(f, size == 0 ? "read_eof" : "read_error", size == 0 ? 0 : error);
+            f->read_ended = 1;
+        }
+    }
+    pthread_mutex_unlock(&flows_lock);
+}
+
 static void account(int fd, ssize_t size, int incoming) {
     if (!valid_fd(fd) || size <= 0) return;
     pthread_mutex_lock(&flows_lock);
@@ -101,6 +179,7 @@ int __wrap_connect(int fd, const struct sockaddr *addr, socklen_t len) {
     int result = __real_connect(fd, addr, len);
     int saved = errno;
     begin_flow(fd, addr, len, result < 0 ? saved : 0);
+    if (result == 0) lab_tcp_status(fd, 0);
     errno = saved;
     return result;
 }
@@ -122,7 +201,10 @@ int __wrap_close(int fd) {
 ssize_t __wrap_recv(int fd, void *buf, size_t size, int flags) {
     ssize_t count = __real_recv(fd, buf, size, flags);
     int saved = errno;
-    if (!(flags & MSG_PEEK)) account(fd, count, 1);
+    if (!(flags & MSG_PEEK)) {
+        account_receive(fd, buf, count, saved);
+        account(fd, count, 1);
+    }
     errno = saved;
     return count;
 }
@@ -131,7 +213,10 @@ ssize_t __wrap_recvfrom(int fd, void *buf, size_t size, int flags,
                         struct sockaddr *addr, socklen_t *len) {
     ssize_t count = __real_recvfrom(fd, buf, size, flags, addr, len);
     int saved = errno;
-    if (!(flags & MSG_PEEK)) account(fd, count, 1);
+    if (!(flags & MSG_PEEK)) {
+        account_receive(fd, buf, count, saved);
+        account(fd, count, 1);
+    }
     errno = saved;
     return count;
 }

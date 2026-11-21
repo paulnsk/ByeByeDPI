@@ -14,7 +14,7 @@ android {
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "io.github.romanvht.byedpi.lab"
+        applicationId = "io.github.romanvht.byedpi.lab.trace"
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 34

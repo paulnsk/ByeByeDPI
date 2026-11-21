@@ -5,8 +5,10 @@ project(byedpi_native)
 file(GLOB BYE_DPI_SRC byedpi/*.c)
 list(REMOVE_ITEM BYE_DPI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/byedpi/win_service.c)
 
+include(lab-hooks.cmake)
+
 add_library(byedpi SHARED ${BYE_DPI_SRC} byedpi-jni.c hev-jni.c lab-traffic.c)
-target_include_directories(byedpi PRIVATE byedpi)
+target_include_directories(byedpi PRIVATE byedpi .)
 
 target_compile_options(byedpi PRIVATE -std=c99 -O2 -Wall -Wno-unused -Wextra -Wno-unused-parameter -pedantic)
 target_compile_definitions(byedpi PRIVATE ANDROID_APP)

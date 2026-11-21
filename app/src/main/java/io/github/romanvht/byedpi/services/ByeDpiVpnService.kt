@@ -98,7 +98,7 @@ class ByeDpiVpnService : VpnService() {
     private fun createTunnel(configuration: Configuration): ParcelFileDescriptor {
         Log.d(TAG, "DNS: ${configuration.dns}")
         val builder = Builder()
-        builder.setSession("ByeByeDPI Lab")
+        builder.setSession("ByeByeDPI Lab Trace")
         builder.setConfigureIntent(
             PendingIntent.getActivity(
                 this,
