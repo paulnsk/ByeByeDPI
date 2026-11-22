@@ -203,7 +203,11 @@ internal class NativeSession(
             try {
                 val engine = withContext(Dispatchers.IO) { ByeDpiProxy() }
                 proxy = engine
-                proxyThread = runNative("ByeDPI") { engine.startProxy(config.args.toTypedArray()) }
+                proxyThread = runNative("ByeDPI") {
+                    val journal = java.io.File(service.noBackupFilesDir, "traffic")
+                    val path = journal.absolutePath.takeIf { journal.isDirectory || journal.mkdirs() }
+                    engine.startProxy(config.args.toTypedArray(), path)
+                }
                 withTimeout(START_TIMEOUT) { awaitProxy(config.host, config.port) }
                 createTunnel?.let { create ->
                     val fd = create(config)

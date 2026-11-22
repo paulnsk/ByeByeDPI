@@ -5,7 +5,10 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <limits.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
@@ -18,7 +21,10 @@ struct flow {
     int type;
     unsigned port;
     char ip[INET6_ADDRSTRLEN];
-    uint64_t up, down, last_log;
+    uint64_t up, down, last_log, started;
+    char host[254];
+    const char *first_tls, *finished;
+    int tcp, error;
     unsigned char tls_start[6];
     unsigned tls_bytes;
     int tls_expected, tls_observed, read_ended;
@@ -29,6 +35,7 @@ static struct flow flows[MAX_FD];
 static unsigned next_id;
 static int hello_wait_ms;
 static pthread_mutex_t flows_lock = PTHREAD_MUTEX_INITIALIZER;
+static char journal_dir[PATH_MAX];
 
 int __real_connect(int fd, const struct sockaddr *addr, socklen_t len);
 int __real_close(int fd);
@@ -43,6 +50,45 @@ static uint64_t monotonic_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+void lab_set_journal_dir(const char *path) {
+    if (path && strlen(path) < sizeof(journal_dir)) strcpy(journal_dir, path);
+}
+
+static void journal(const struct flow *f) {
+    enum { DAY_LIMIT = 512 * 1024, DAYS = 8 };
+    static time_t last_hour = -1;
+    static unsigned known, unknown;
+    if (!journal_dir[0] || f->type != SOCK_STREAM || f->port != 443 ||
+        (!f->host[0] && f->tcp != -1)) return;
+    time_t now = time(NULL);
+    time_t day = now / 86400;
+    time_t hour = now / 3600;
+    if (now <= 0) return;
+    if (hour != last_hour) {
+        known = unknown = 0;
+        last_hour = hour;
+    }
+    unsigned *count = f->host[0] ? &known : &unknown;
+    if (*count >= (f->host[0] ? 54 : 10)) return;
+    ++*count;
+
+    char path[PATH_MAX];
+    int length = snprintf(path, sizeof(path), "%s/flow-%02d.jsonl", journal_dir, (int)(day % DAYS));
+    if (length < 0 || length >= (int)sizeof(path)) return;
+    struct stat st;
+    int append = stat(path, &st) == 0 && st.st_mtime / 86400 == day;
+    if (append && st.st_size > DAY_LIMIT - 640) return;
+    FILE *file = fopen(path, append ? "a" : "w");
+    if (!file) return;
+    fprintf(file, "{\"t\":%" PRId64 ",\"duration_ms\":%" PRIu64
+        ",\"peer\":\"%s\",\"sni\":\"%s\",\"tcp\":%d,\"tls\":\"%s\",\"end\":\"%s\","
+        "\"errno\":%d,\"up\":%" PRIu64 ",\"down\":%" PRIu64 "}\n",
+        (int64_t)now, monotonic_ms() - f->started, f->ip, f->host, f->tcp,
+        f->first_tls ? f->first_tls : "", f->finished ? f->finished : "close",
+        f->error, f->up, f->down);
+    fclose(file);
 }
 
 static void emit(const struct flow *f, const char *event, int error) {
@@ -77,12 +123,16 @@ static void begin_flow(int fd, const struct sockaddr *addr, socklen_t len, int e
 
     pthread_mutex_lock(&flows_lock);
     f.id = ++next_id;
-    f.last_log = monotonic_ms();
+    f.last_log = f.started = monotonic_ms();
     if (error == 0 || error == EINPROGRESS || error == EALREADY) {
         if (flows[fd].id) emit(&flows[fd], "reconnect", 0);
         flows[fd] = f;
         emit(&f, "connect", error);
     } else {
+        f.tcp = -1;
+        f.error = error;
+        f.finished = "connect_error";
+        journal(&f);
         emit(&f, "connect_error", error);
     }
     pthread_mutex_unlock(&flows_lock);
@@ -96,9 +146,12 @@ static void stage(const struct flow *f, const char *event, int error) {
 void lab_tcp_status(int fd, int error) {
     if (!valid_fd(fd)) return;
     pthread_mutex_lock(&flows_lock);
-    const struct flow *f = &flows[fd];
-    if (f->id && f->type == SOCK_STREAM)
+    struct flow *f = &flows[fd];
+    if (f->id && f->type == SOCK_STREAM) {
+        f->tcp = error == 0 ? 1 : -1;
+        f->error = error;
         stage(f, error == 0 ? "tcp_ready" : "tcp_failed", error);
+    }
     pthread_mutex_unlock(&flows_lock);
 }
 
@@ -124,6 +177,8 @@ void lab_client_hello(int fd, const char *data, size_t len) {
     pthread_mutex_lock(&flows_lock);
     struct flow *f = &flows[fd];
     if (f->id && f->type == SOCK_STREAM && !f->tls_expected) {
+        memcpy(f->host, host, (size_t)n);
+        f->host[n] = '\0';
         f->tls_expected = 1;
         f->media = n > 3 && host[0] == 'r' && host[1] == 'r'
             && host[2] >= '0' && host[2] <= '9' && domain_suffix(host, n, "googlevideo.com");
@@ -195,11 +250,14 @@ static void account_receive(int fd, const void *data, ssize_t size, int error) {
                     else if (h[0] == 21) event = "tls_alert";
                 }
                 stage(f, event, 0);
+                f->first_tls = event;
                 f->tls_observed = 1;
             }
         } else if (size <= 0 && !f->read_ended &&
                    (size == 0 || (error != EAGAIN && error != EWOULDBLOCK && error != EINTR))) {
             stage(f, size == 0 ? "read_eof" : "read_error", size == 0 ? 0 : error);
+            f->finished = size == 0 ? "read_eof" : "read_error";
+            if (size < 0) f->error = error;
             f->read_ended = 1;
         }
     }
@@ -238,6 +296,7 @@ int __wrap_close(int fd) {
     if (valid_fd(fd)) {
         pthread_mutex_lock(&flows_lock);
         if (flows[fd].id) {
+            journal(&flows[fd]);
             emit(&flows[fd], "close", 0);
             flows[fd].id = 0;
         }

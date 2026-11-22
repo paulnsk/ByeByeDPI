@@ -149,6 +149,13 @@ class MainActivity : BaseActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setupToolbar()
+        findViewById<com.google.android.material.appbar.MaterialToolbar>(R.id.toolbar).apply {
+            setBackgroundColor(0xff683714.toInt())
+            setTitleTextColor(android.graphics.Color.WHITE)
+            setSubtitleTextColor(android.graphics.Color.WHITE)
+            navigationIcon?.setTint(android.graphics.Color.WHITE)
+            overflowIcon?.setTint(android.graphics.Color.WHITE)
+        }
 
         historyUtils = HistoryUtils(this)
 

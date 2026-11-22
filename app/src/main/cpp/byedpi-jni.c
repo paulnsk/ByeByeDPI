@@ -21,7 +21,7 @@ int __wrap_daemon(__attribute__((unused)) int nochdir, __attribute__((unused)) i
 }
 
 JNIEXPORT jint JNICALL
-Java_io_github_romanvht_byedpi_core_ByeDpiProxy_jniStartProxy(JNIEnv *env, __attribute__((unused)) jobject thiz, jobjectArray args) {
+Java_io_github_romanvht_byedpi_core_ByeDpiProxy_jniStartProxy(JNIEnv *env, __attribute__((unused)) jobject thiz, jobjectArray args, jstring journal_dir) {
     pthread_mutex_lock(&proxy_mutex);
     if (proxy_started) {
         pthread_mutex_unlock(&proxy_mutex);
@@ -30,6 +30,14 @@ Java_io_github_romanvht_byedpi_core_ByeDpiProxy_jniStartProxy(JNIEnv *env, __att
     }
     proxy_started = 1;
     pthread_mutex_unlock(&proxy_mutex);
+
+    if (journal_dir) {
+        const char *path = (*env)->GetStringUTFChars(env, journal_dir, NULL);
+        if (path) {
+            lab_set_journal_dir(path);
+            (*env)->ReleaseStringUTFChars(env, journal_dir, path);
+        }
+    }
 
     int argc = (*env)->GetArrayLength(env, args);
     char **argv = calloc(argc + 1, sizeof(char *));
